@@ -16,20 +16,20 @@ module RSI_FSM #(
     output reg buy_signal,
     output reg sell_signal,
     // Additional outputs for debugging and monitoring
-    output wire [2:0] state_out,             // Current state for monitoring
+    output wire [4:0] state_out,             // FIX 3: Changed to 5 bits to match one-hot encoding
     output wire fifo_ready                   // Indicates FIFO has enough data
 );
 
     // --- FSM States with one-hot encoding for better timing
-    localparam [4:0] 
+    localparam [4:0]
         IDLE     = 5'b00001,
         FETCH    = 5'b00010,
         COMPUTE  = 5'b00100,
         WAIT_DIV = 5'b01000,
         DECISION = 5'b10000;
-    
+
     reg [4:0] current_state, next_state;
-    
+
     // --- FIFO implementation with efficient resource usage ---
     // FIFO registers or BlockRAM based on parameter
     generate
@@ -38,72 +38,100 @@ module RSI_FSM #(
             reg [PRICE_WIDTH-1:0] price_fifo_ram [0:RSI_PERIOD-1];
             reg [$clog2(RSI_PERIOD)-1:0] write_ptr;
             reg [PRICE_WIDTH-1:0] fifo_output;
-            
+
+            // FIX 1: Added explicit management of fifo_count for BRAM FIFO
+            reg [$clog2(RSI_PERIOD+1)-1:0] fifo_count_internal;
+
             always @(posedge clk) begin
-                if (current_state == FETCH && new_price) begin
+                if (~rst_n || EOD) begin
+                    write_ptr <= 0;
+                    fifo_count_internal <= 0; // FIX: Reset count on reset
+                end else if (current_state == FETCH && new_price) begin
+                    // Improved FIFO Full Condition Handling for BRAM FIFO
                     price_fifo_ram[write_ptr] <= price_in;
                     write_ptr <= (write_ptr == RSI_PERIOD-1) ? 0 : write_ptr + 1;
+
+                    // Update FIFO count
+                    if (fifo_count_internal < RSI_PERIOD)
+                        fifo_count_internal <= fifo_count_internal + 1;
                 end
             end
-            
+
             // Efficient way to read the oldest value from circular buffer
-            wire [$clog2(RSI_PERIOD)-1:0] read_ptr = (write_ptr == 0) ? 
-                                          RSI_PERIOD-1 : write_ptr - 1;
-            
-            // Read operation
+            wire [$clog2(RSI_PERIOD)-1:0] read_ptr = (fifo_count_internal < RSI_PERIOD) ?
+                                          0 : ((write_ptr == 0) ? RSI_PERIOD-1 : write_ptr - 1);
+
+            // Read operation - Registered output for timing improvement
             always @(posedge clk) begin
-                fifo_output <= price_fifo_ram[read_ptr];
+                if (current_state == FETCH || current_state == COMPUTE) // Keep output updated during relevant states
+                    fifo_output <= price_fifo_ram[read_ptr];
             end
+
+            // Connect internal count to module count
+            assign fifo_count = fifo_count_internal;
+
         end else begin : g_reg_fifo
             // Register-based FIFO for smaller RSI_PERIOD values
             reg [PRICE_WIDTH-1:0] price_fifo [0:RSI_PERIOD-1];
-            
+            reg [$clog2(RSI_PERIOD+1)-1:0] fifo_count_internal;
+
             // This will be efficiently synthesized for small FIFO sizes
             integer i;
             always @(posedge clk) begin
-                if (current_state == FETCH && new_price) begin
+                if (~rst_n || EOD) begin
+                    for (i = 0; i < RSI_PERIOD; i = i + 1)
+                        price_fifo[i] <= 0;
+                    fifo_count_internal <= 0; // FIX: Reset count on reset
+                end else if (current_state == FETCH && new_price) begin
+                    // For register-based FIFO, shift register implementation
                     for (i = RSI_PERIOD-1; i > 0; i = i - 1)
                         price_fifo[i] <= price_fifo[i-1];
                     price_fifo[0] <= price_in;
+
+                    // Update FIFO count
+                    if (fifo_count_internal < RSI_PERIOD)
+                        fifo_count_internal <= fifo_count_internal + 1;
                 end
             end
+
+            // Connect internal count to module count
+            assign fifo_count = fifo_count_internal;
+
+            // Using oldest value in FIFO for calculation
             wire [PRICE_WIDTH-1:0] fifo_output = price_fifo[RSI_PERIOD-1];
         end
     endgenerate
-    
+
     // --- Common counters and state variables ---
-    reg [$clog2(RSI_PERIOD+1)-1:0] fifo_count;
+    wire [$clog2(RSI_PERIOD+1)-1:0] fifo_count; // Changed to wire for generate block assignment
     reg fifo_valid;
     assign fifo_ready = fifo_valid && (fifo_count >= RSI_PERIOD);
-    
+
     // --- Calculation Registers with optimized bit widths ---
     reg [PRICE_WIDTH-1:0] current_price, prev_price;
     reg [PRICE_WIDTH:0] price_diff;              // +1 bit for sign consideration
     reg price_up;
-    
+
     // Optimize gain/loss sum bit widths based on maximum possible value
-    // Worst case: all price diffs are gains/losses, so need log2(PERIOD) extra bits
+    // Worst case: all price diffs are gains/losses, so need log2(RSI_PERIOD) extra bits
     localparam GAIN_SUM_WIDTH = PRICE_WIDTH + $clog2(RSI_PERIOD) + 1;
-    
+
     reg [GAIN_SUM_WIDTH-1:0] gain_sum, loss_sum;
     reg [GAIN_SUM_WIDTH-1:0] avg_gain, avg_loss;
-    
+
     // --- Safe division with overflow protection ---
     reg div_start;
     wire div_done;
+    reg [GAIN_SUM_WIDTH-1:0] RS_numerator, RS_denominator;
     reg [GAIN_SUM_WIDTH-1:0] RS;                 // Relative Strength
     wire [GAIN_SUM_WIDTH-1:0] div_result;
-    
+
     // --- Reset handling ---
     wire reset = ~rst_n | EOD;
-    
-    // --- Convert state encoding for output ---
-    assign state_out = {
-        current_state == DECISION,
-        current_state == WAIT_DIV,
-        current_state == COMPUTE | current_state == FETCH | current_state == IDLE
-    };
-    
+
+    // FIX 3: Output full state for better debugging
+    assign state_out = current_state;
+
     // --- Improved pipelined divider with overflow protection ---
     pipelined_divider #(
         .WIDTH(GAIN_SUM_WIDTH),
@@ -113,25 +141,26 @@ module RSI_FSM #(
         .clk(clk),
         .reset(reset),
         .start(div_start),
-        .numerator(avg_gain),
-        .denominator((avg_loss == 0) ? 1 : avg_loss),
+        .numerator(RS_numerator),
+        .denominator(RS_denominator),
         .quotient(div_result),
         .done(div_done),
         .overflow()                             // Optional connection for monitoring
     );
-    
+
     // --- FSM: State Transition Logic ---
-    always @(posedge clk or posedge reset) begin
+    // FIX: Simplified reset handling to avoid asynchronous paths
+    always @(posedge clk) begin
         if (reset)
             current_state <= IDLE;
         else
             current_state <= next_state;
     end
-    
+
     // --- FSM: Next State Logic with default assignments to avoid latches ---
     always @(*) begin
         next_state = current_state; // Default: stay in current state
-        
+
         case (current_state)
             IDLE:     next_state = new_price ? FETCH : IDLE;
             FETCH:    next_state = COMPUTE;
@@ -141,12 +170,11 @@ module RSI_FSM #(
             default:  next_state = IDLE;
         endcase
     end
-    
+
     // --- Main Processing Logic with pipelining for better timing ---
     always @(posedge clk) begin
         if (reset) begin
             // Reset with explicit initialization
-            fifo_count <= 0;
             fifo_valid <= 0;
             gain_sum <= 0;
             loss_sum <= 0;
@@ -158,49 +186,37 @@ module RSI_FSM #(
             prev_price <= 0;
             avg_gain <= 0;
             avg_loss <= 0;
-            
-            // Reset pointers for BRAM FIFO if used
-            if (USE_BRAM_FIFO)
-                g_bram_fifo.write_ptr <= 0;
-                
         end else begin
             // Default signal states to prevent unwanted latches
             div_start <= 0;
-            
+
             case (current_state)
                 IDLE: begin
                     // Clear trading signals each cycle
                     buy_signal <= 0;
                     sell_signal <= 0;
                 end
-                
+
                 FETCH: begin
                     // FIFO shifting happens in the generate block
-                    
-                    // Update FIFO status efficiently
-                    if (new_price && fifo_count < RSI_PERIOD)
-                        fifo_count <= fifo_count + 1;
-                        
                     fifo_valid <= (fifo_count >= 1) || (fifo_count == 0 && new_price);
-                    
+
                     // Update price registers
                     if (new_price) begin
+                        prev_price <= current_price;
                         current_price <= price_in;
-                        // Use FIFO output directly
-                        prev_price <= USE_BRAM_FIFO ? g_bram_fifo.fifo_output : 
-                                     g_reg_fifo.fifo_output;
                     end
                 end
-                
+
                 COMPUTE: begin
                     if (fifo_valid) begin
                         // Compute price difference with saturation to prevent overflow
                         price_up = (current_price > prev_price);
-                        
+
                         // Calculate difference with saturation
                         if (price_up) begin
                             // Price increase - check for overflow
-                            if (current_price > {1'b0, prev_price}) 
+                            if (current_price > {1'b0, prev_price})
                                 price_diff <= current_price - prev_price;
                             else
                                 price_diff <= {PRICE_WIDTH+1{1'b1}}; // Max value on overflow
@@ -211,7 +227,7 @@ module RSI_FSM #(
                             else
                                 price_diff <= {PRICE_WIDTH+1{1'b1}}; // Max value on overflow
                         end
-                        
+
                         // Split gain/loss logic for clarity and better timing
                         if (fifo_count < RSI_PERIOD) begin
                             // Initial accumulation phase
@@ -220,9 +236,9 @@ module RSI_FSM #(
                             end else begin
                                 loss_sum <= loss_sum + price_diff;
                             end
-                            
+
                             // Calculate initial averages at end of accumulation
-                            if (fifo_count == RSI_PERIOD-1) begin
+                            if (fifo_count == RSI_PERIOD-1) begin // FIX: Use period-1 since we're checking before increment
                                 avg_gain <= gain_sum / RSI_PERIOD;
                                 avg_loss <= loss_sum / RSI_PERIOD;
                             end
@@ -230,59 +246,62 @@ module RSI_FSM #(
                             // Wilder's smoothing with overflow protection
                             // Pipelined for better timing
                             if (price_up) begin
-                                // Gain calculation in stages to improve timing
-                                avg_gain <= ((avg_gain * (RSI_PERIOD-1)) + 
-                                          (price_diff << FIXED_POINT_BITS)) / RSI_PERIOD;
+                                avg_gain <= ((avg_gain * (RSI_PERIOD-1)) +
+                                          (price_diff << FIXED_POINT_BITS)) / RSI_PERIOD; // FIX: Apply fixed-point scaling
                                 avg_loss <= (avg_loss * (RSI_PERIOD-1)) / RSI_PERIOD;
                             end else begin
                                 avg_gain <= (avg_gain * (RSI_PERIOD-1)) / RSI_PERIOD;
-                                avg_loss <= ((avg_loss * (RSI_PERIOD-1)) + 
-                                          (price_diff << FIXED_POINT_BITS)) / RSI_PERIOD;
+                                avg_loss <= ((avg_loss * (RSI_PERIOD-1)) +
+                                          (price_diff << FIXED_POINT_BITS)) / RSI_PERIOD; // FIX: Apply fixed-point scaling
                             end
                         end
-                        
+
+                        // Prepare for RS calculation
+                        RS_numerator <= avg_gain;
+                        RS_denominator <= (avg_loss == 0) ? 1 : avg_loss;
                         // Initialize division if we have enough data
-                        if (fifo_count >= RSI_PERIOD-1)
+                        if (fifo_count >= RSI_PERIOD)
                             div_start <= 1;
                     end
                 end
-                
+
                 WAIT_DIV: begin
                     // Clear division start signal
                     div_start <= 0;
-                    
+
                     if (div_done) begin
                         RS <= div_result;
-                        
+
                         // More accurate fixed-point RSI calculation
                         // RSI = 100 - (100 / (1 + RS))
-                        if (div_result == 0) begin
-                            RSI_out <= 0;
+                        if (avg_loss == 0) begin
+                            // FIX 2: RSI = 100 when avg_loss is zero (RS is effectively infinite)
+                            RSI_out <= 100;
                         end else begin
                             // Use full fixed-point precision for calculation
                             // with saturation to prevent overflow
                             reg [GAIN_SUM_WIDTH + FIXED_POINT_BITS:0] denom;
-                            reg [GAIN_SUM_WIDTH + FIXED_POINT_BITS:0] rsi_calc;
-                            
+                            reg [GAIN_SUM_WIDTH + RSI_WIDTH + FIXED_POINT_BITS:0] rsi_calc_full; // Increased width for intermediate calculation
+                            reg [RSI_WIDTH-1:0] rsi_temp;
+
                             denom = (1 << FIXED_POINT_BITS) + div_result;
-                            rsi_calc = (100 << FIXED_POINT_BITS) - 
-                                      ((100 << (2*FIXED_POINT_BITS)) / denom);
-                            
-                            // Apply shift and saturation
-                            if (rsi_calc > (100 << FIXED_POINT_BITS))
+                            rsi_calc_full = (100 << FIXED_POINT_BITS) -
+                                      ((100 << (2*FIXED_POINT_BITS)) / denom); // Corrected shift for 100
+
+                            rsi_temp = rsi_calc_full >> FIXED_POINT_BITS;
+
+                            // Apply saturation to RSI_out
+                            if (rsi_temp > 100)
                                 RSI_out <= 100;
                             else
-                                RSI_out <= rsi_calc >> FIXED_POINT_BITS;
+                                RSI_out <= rsi_temp;
                         end
                     end
                 end
-                
+
                 DECISION: begin
-                    // Generate trading signals with hysteresis to prevent signal oscillation
+                    // Generate trading signals with configurable thresholds
                     if (fifo_ready) begin
-                        // Ensure RSI is in valid range
-                        RSI_out <= (RSI_out > 100) ? 100 : RSI_out;
-                        
                         // Generate signals with configurable thresholds
                         buy_signal <= (RSI_out < BUY_THRESHOLD);
                         sell_signal <= (RSI_out > SELL_THRESHOLD);
@@ -313,76 +332,88 @@ module pipelined_divider #(
     reg [WIDTH-1:0] num_pipeline [0:PIPELINE_STAGES-1];
     reg [WIDTH-1:0] den_pipeline [0:PIPELINE_STAGES-1];
     reg [PIPELINE_STAGES-1:0] valid_pipeline;
-    
+    reg [WIDTH*2-1:0] remainder_pipeline [0:PIPELINE_STAGES-1]; // Remainder for division
+
     // Pipeline stage for overflow detection
     reg [PIPELINE_STAGES-1:0] overflow_pipeline;
-    
+
+    // FIX: Improve division algorithm with proper bit counting
+    reg [$clog2(WIDTH+1)-1:0] bit_count; // Counter for division bits
+    reg state;
+    localparam IDLE = 1'b0, DIVIDING = 1'b1;
+
     // More efficient for loop with single iterator declaration
     integer i;
-    
-    always @(posedge clk or posedge reset) begin
+
+    always @(posedge clk) begin
         if (reset) begin
+            state <= IDLE;
             // Reset all pipeline registers and outputs
             for (i = 0; i < PIPELINE_STAGES; i = i + 1) begin
                 num_pipeline[i] <= 0;
                 den_pipeline[i] <= 0;
                 valid_pipeline[i] <= 0;
                 overflow_pipeline[i] <= 0;
+                remainder_pipeline[i] <= 0;
             end
             quotient <= 0;
             done <= 0;
             overflow <= 0;
+            bit_count <= 0;
         end else begin
-            // Input stage with overflow detection
-            if (start) begin
-                // Input checking with overflow detection
-                if (CHECK_OVERFLOW) begin
-                    // Check for division by zero or extreme values
-                    overflow_pipeline[0] <= (denominator == 0) || 
-                                         (numerator > {WIDTH{1'b1}} / 2);
-                end else begin
-                    overflow_pipeline[0] <= 0;
+            case (state)
+                IDLE: begin
+                    done <= 0; // Clear done signal in IDLE state
+
+                    if (start) begin
+                        state <= DIVIDING;
+                        bit_count <= 0;
+
+                        // FIX: Properly initialize division operation
+                        // Check for division by zero
+                        if (denominator == 0) begin
+                            overflow <= 1;
+                            quotient <= {WIDTH{1'b1}}; // Maximum value on division by zero
+                            done <= 1;
+                            state <= IDLE;
+                        end else begin
+                            // Initialize division operation
+                            overflow <= 0;
+                            // Setup initial remainder and quotient
+                            quotient <= 0;
+                            // Initialize remainder with numerator in lower half
+                            remainder_pipeline[0] <= {WIDTH'b0, numerator};
+                            // Store denominator for division
+                            den_pipeline[0] <= denominator;
+                        end
+                    end
                 end
-                
-                num_pipeline[0] <= numerator;
-                den_pipeline[0] <= (denominator == 0) ? 1 : denominator; // Prevent division by zero
-                valid_pipeline[0] <= 1;
-            end else begin
-                valid_pipeline[0] <= 0;
-                overflow_pipeline[0] <= 0;
-            end
-            
-            // Pipeline stages - shift registers through pipeline
-            for (i = 1; i < PIPELINE_STAGES; i = i + 1) begin
-                num_pipeline[i] <= num_pipeline[i-1];
-                den_pipeline[i] <= den_pipeline[i-1];
-                valid_pipeline[i] <= valid_pipeline[i-1];
-                overflow_pipeline[i] <= overflow_pipeline[i-1];
-            end
-            
-            // Output stage with safe division and overflow propagation
-            done <= valid_pipeline[PIPELINE_STAGES-1];
-            overflow <= overflow_pipeline[PIPELINE_STAGES-1];
-            
-            if (valid_pipeline[PIPELINE_STAGES-1]) begin
-                // Safe division with output clamping on overflow
-                if (overflow_pipeline[PIPELINE_STAGES-1] || den_pipeline[PIPELINE_STAGES-1] == 0) begin
-                    quotient <= {WIDTH{1'b1}}; // Max value on overflow
-                end else begin
-                    quotient <= num_pipeline[PIPELINE_STAGES-1] / den_pipeline[PIPELINE_STAGES-1];
+
+                DIVIDING: begin
+                    // FIX: Improved division algorithm
+                    if (bit_count < WIDTH) begin
+                        // Shift remainder left by 1 bit
+                        remainder_pipeline[0] <= remainder_pipeline[0] << 1;
+
+                        // Check if we can subtract denominator
+                        if (remainder_pipeline[0][WIDTH*2-1:WIDTH] >= den_pipeline[0]) begin
+                            remainder_pipeline[0][WIDTH*2-1:WIDTH] <=
+                                remainder_pipeline[0][WIDTH*2-1:WIDTH] - den_pipeline[0];
+                            quotient <= (quotient << 1) | 1'b1;
+                        else
+                            quotient <= quotient << 1;
+                        end
+
+                        bit_count <= bit_count + 1;
+
+                        // If this is the last bit, signal completion
+                        if (bit_count == WIDTH-1) begin
+                            done <= 1;
+                            state <= IDLE;
+                        end
+                    end
                 end
-            end
+            endcase
         end
     end
-    
-    // Formal verification properties (if supported by tool)
-    // synthesis translate_off
-    // Example SVA property: division by zero should never happen at output stage
-    property div_by_zero_check;
-        @(posedge clk) disable iff (reset)
-        valid_pipeline[PIPELINE_STAGES-1] |-> den_pipeline[PIPELINE_STAGES-1] != 0;
-    endproperty
-    assert property (div_by_zero_check);
-    // synthesis translate_on
-    
 endmodule
