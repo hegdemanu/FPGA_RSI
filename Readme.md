@@ -1,3 +1,4 @@
+
 ---
 
 # 🚀 RSI FSM Implementation in FPGA (Verilog)
@@ -33,10 +34,10 @@ This project implements a **Relative Strength Index (RSI) calculation FSM** in V
 | Signal Name     | Direction | Width  | Description                                  |
 |----------------|-----------|--------|----------------------------------------------|
 | `clk`           | Input     | 1 bit  | Clock signal controlling FSM operation      |
-| `rst_n`         | Input     | 1 bit  | Active-low asynchronous reset               |
+| `rst_n`         | Input     | 1 bit  | Active\-low asynchronous reset               |
 | `price_in`      | Input     | 50 bits| New price data input                        |
 | `new_price`     | Input     | 1 bit  | Signal indicating arrival of new price      |
-| `EOD`           | Input     | 1 bit  | End-of-Day reset signal                     |
+| `EOD`           | Input     | 1 bit  | End\-of\-Day reset signal                     |
 | `RSI_out`       | Output    | 10 bits| Computed RSI output                         |
 | `buy_signal`    | Output    | 1 bit  | Buy decision signal                         |
 | `sell_signal`   | Output    | 1 bit  | Sell decision signal                        |
@@ -54,21 +55,21 @@ This project implements a **Relative Strength Index (RSI) calculation FSM** in V
 
 ## 📝 **Core Components**
 ### 1️⃣ **FSM Controller**
-- Implements one-hot state encoding for improved timing.
-- Handles price fetching, RSI computation, and decision-making.  
+- Implements one\-hot state encoding for improved timing.
+- Handles price fetching, RSI computation, and decision\-making.  
 - Ensures sequential processing of states to maintain FSM integrity.  
 - Manages FIFO initialization tracking to prevent invalid calculations.  
 
 ### 2️⃣ **Configurable Price FIFO**
-- Supports both register-based and BlockRAM-based implementations.
-- 14-entry FIFO stores price history (configurable via parameter).  
+- Supports both register\-based and BlockRAM\-based implementations.
+- 14\-entry FIFO stores price history (configurable via parameter).  
 - Tracks initialization status to ensure valid data before computation.  
 - Maintains count of valid entries for proper calculation initiation.  
 
 ### 3️⃣ **RSI Calculation Block**
 - Computes gain and loss for each period.  
 - Uses exponential smoothing for average gain/loss.  
-- Implements fixed-point arithmetic for enhanced calculation precision.  
+- Implements fixed\-point arithmetic for enhanced calculation precision.  
 - Includes overflow protection and saturation logic for reliability.
 
 ### 4️⃣ **Pipelined Divider**
@@ -104,19 +105,19 @@ $$
 ---
 
 ## 📏 **Fixed-Point Implementation**
-- Uses bit-shifting for enhanced precision in RSI calculation.  
+- Uses bit\-shifting for enhanced precision in RSI calculation.  
 - Implements the formula:  
 
 $$
 \text{RSI} = 100 - \left( \frac{100 \times 2^{\text{FIXED\_POINT\_BITS}}}{2^{\text{FIXED\_POINT\_BITS}} + RS} \right) \div 2^{\text{FIXED\_POINT\_BITS}}
 $$
 
-- Configurable fixed-point precision bits.
+- Configurable fixed\-point precision bits.
 - Includes saturation logic to prevent overflow.
 
 ---
 
-## ⚡ **Division Module (pipelined_divider)**
+## ⚡ **Division Module (pipelined\_divider)**
 - Configurable pipeline stages for division.
 - Prevents zero division errors and maintains stability.  
 - Implemented with overflow detection.
@@ -145,23 +146,23 @@ $$
 ---
 
 ## 📊 **Configuration Parameters**
-- **PRICE_WIDTH:** Width of price input (default: 50)
-- **RSI_WIDTH:** Width of RSI output (default: 10)
-- **RSI_PERIOD:** Period for RSI calculation (default: 14)
-- **BUY_THRESHOLD:** RSI value to trigger buy (default: 30)
-- **SELL_THRESHOLD:** RSI value to trigger sell (default: 70)
-- **FIXED_POINT_BITS:** Precision bits for fixed-point math (default: 8)
-- **USE_BRAM_FIFO:** Set to 1 for BlockRAM FIFO, 0 for register-based (default: 1)
+- **PRICE\_WIDTH:** Width of price input (default: 50)
+- **RSI\_WIDTH:** Width of RSI output (default: 10)
+- **RSI\_PERIOD:** Period for RSI calculation (default: 14)
+- **BUY\_THRESHOLD:** RSI value to trigger buy (default: 30)
+- **SELL\_THRESHOLD:** RSI value to trigger sell (default: 70)
+- **FIXED\_POINT\_BITS:** Precision bits for fixed-point math (default: 8)
+- **USE\_BRAM\_FIFO:** Set to 1 for BlockRAM FIFO, 0 for register-based (default: 1)
 
 ---
 
 ## 🔥 **FPGA Implementation Notes**
-- Optimized for generic FPGA implementation with no vendor-specific features.  
-- Uses fixed-point arithmetic for enhanced precision without floating-point units.  
+- Optimized for generic FPGA implementation with no vendor\-specific features.  
+- Uses fixed\-point arithmetic for enhanced precision without floating\-point units.  
 - Division module latency managed with dedicated wait state.  
 - Expanded bit widths prevent overflow in gain/loss accumulation.  
 - FIFO implementation optimized based on RSI period length.
-- One-hot encoding improves FSM timing and reliability.
+- One\-hot encoding improves FSM timing and reliability.
 
 ---
 
