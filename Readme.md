@@ -1,7 +1,3 @@
-Here's a complete `README.md` for your **RSI FPGA Implementation Project:**
-
----
-
 # 🚀 RSI FSM Implementation in FPGA (Verilog)
 
 ## 📚 **Project Overview**
@@ -15,6 +11,7 @@ This project implements a **Relative Strength Index (RSI) calculation FSM** in V
 - ✅ Implement FSM for data fetching, computation, and decision-making.  
 - ✅ Ensure FPGA-friendly implementation with clock-cycle-controlled operations.  
 - ✅ Handle End-of-Day (EOD) reset and initialization of FIFO.  
+- ✅ Implement fixed-point arithmetic for enhanced precision.
 
 ---
 
@@ -43,6 +40,10 @@ This project implements a **Relative Strength Index (RSI) calculation FSM** in V
 | `div_start`     | Internal  | 1 bit  | Start signal for division                   |
 | `div_done`      | Internal  | 1 bit  | Completion flag for division                |
 | `div_result`    | Internal  | 32 bits| Division result                             |
+| `gain_sum`      | Internal  | 64 bits| Accumulated gain for RSI calculation        |
+| `loss_sum`      | Internal  | 64 bits| Accumulated loss for RSI calculation        |
+| `avg_gain`      | Internal  | 32 bits| Average gain with enhanced precision        |
+| `avg_loss`      | Internal  | 32 bits| Average loss with enhanced precision        |
 
 ---
 
@@ -50,18 +51,22 @@ This project implements a **Relative Strength Index (RSI) calculation FSM** in V
 ### 1️⃣ **FSM Controller**
 - Handles price fetching, RSI computation, and decision-making.
 - Ensures sequential processing of states to maintain FSM integrity.
+- Manages FIFO initialization tracking to prevent invalid calculations.
 
 ### 2️⃣ **Price FIFO**
 - 14-entry FIFO stores price history.
-- Supports shift and push operations for real-time data.
+- Tracks initialization status to ensure valid data before computation.
+- Maintains count of valid entries for proper calculation initiation.
 
 ### 3️⃣ **RSI Calculation Block**
 - Computes gain and loss for each period.
 - Uses exponential smoothing for average gain/loss.
+- Implements fixed-point arithmetic for enhanced calculation precision.
 
 ### 4️⃣ **Pipelined Divider**
 - 8-cycle latency division for computing RS.
 - Prevents division by zero using denominator checks.
+- Controlled via start/done handshaking for reliable operation.
 
 ---
 
@@ -84,19 +89,24 @@ RSI = 100 - \frac{100}{1 + RS}
 \text{New Avg Loss} = \frac{(13 \times \text{Prev Avg Loss}) + \text{Current Loss}}{14}
 \]
 
+### **Fixed-Point Implementation**
+- Uses bit-shifting for enhanced precision in RSI calculation
+- Implements the formula: `RSI <= 100 - ((100 << 8) / ((1 << 8) + RS)) >> 8`
+- Provides more accurate results than simple integer division
+
 ---
 
 ## ⚡ **Division Module (pipelined_divider)**
 - 8-cycle pipelined division for high accuracy.
 - Prevents zero division errors and maintains stability.
+- Implemented within the main RSI_FSM module for simplified file structure.
 
 ---
 
 ## 📦 **File Structure**
 ```
 📂 RSI_FPGA
-├── 📄 RSI_FSM.v                # Main FSM module
-├── 📄 pipelined_divider.v      # Pipelined division module
+├── 📄 rsi_fpga.v               # Complete implementation with FSM and divider
 └── 📄 README.md                # Project documentation
 ```
 
@@ -105,8 +115,10 @@ RSI = 100 - \frac{100}{1 + RS}
 ## 🧪 **Test Bench Guidelines**
 1. **Initial Reset:** Apply a reset for 2 clock cycles.  
 2. **Feed Price Data:** Simulate new price data with `new_price` high.  
-3. **Check RSI Values:** Validate RSI output after sufficient price entries.  
-4. **Test Buy/Sell Conditions:** Confirm buy/sell signals at RSI < 30 and RSI > 70.
+3. **Wait States:** Allow sufficient cycles for division completion (8 cycles).
+4. **FIFO Initialization:** Provide at least 14 price entries before expecting valid RSI.
+5. **Check RSI Values:** Validate RSI output after sufficient price entries.  
+6. **Test Buy/Sell Conditions:** Confirm buy/sell signals at RSI < 30 and RSI > 70.
 
 ---
 
@@ -114,14 +126,17 @@ RSI = 100 - \frac{100}{1 + RS}
 - **Clock Frequency:** 50 MHz  
 - **FIFO Depth:** 14  
 - **Division Latency:** 8 clock cycles  
+- **RSI Buy Threshold:** < 30
+- **RSI Sell Threshold:** > 70
 
 ---
 
 ## 🔥 **FPGA Implementation Notes**
-- Optimized for FPGA with pipeline stages for division.  
-- Uses minimal resources for RSI computation.  
-- Division module latency managed with FSM state transition.  
-- Ready for deployment on Xilinx/Intel FPGAs.  
+- Optimized for generic FPGA implementation with no vendor-specific features.
+- Uses fixed-point arithmetic for enhanced precision without floating-point units.
+- Division module latency managed with dedicated wait state.
+- Expanded bit widths prevent overflow in gain/loss accumulation.
+- FIFO initialization tracking prevents invalid calculations.
 
 ---
 
@@ -129,6 +144,7 @@ RSI = 100 - \frac{100}{1 + RS}
 - EOD reset ensures clean state transition.  
 - Division by zero is avoided with safe fallback.  
 - Initial RSI values default to zero until full FIFO population.
+- Proper FIFO initialization tracking prevents premature calculations.
 
 ---
 
@@ -142,18 +158,9 @@ RSI = 100 - \frac{100}{1 + RS}
 - ✅ Dynamic adjustment of period length.  
 - ✅ Adding configurable thresholds for RSI decision.  
 - ✅ Integrating real-time data feeds and API support.  
+- ✅ Separate modules into individual files for easier maintainability.
+- ✅ Vendor-specific optimizations for Xilinx/Intel FPGAs.
 
 ---
 
-## 📞 **Contact Information**
-For any inquiries or contributions:  
-📧 **Email:** manu.rsi@trading.com  
-💻 **GitHub:** [ManuHegde/RSI-FPGA](https://github.com/ManuHegde/RSI-FPGA)
-
----
-
-⚡ _“Precision Trading Decisions with FPGA Speed!”_ ⚡
-
----
-
-Let me know if you need help simulating this or integrating with a real-time trading system! 🚀
+⚡ _"Precision Trading Decisions with FPGA Speed!"_ ⚡
