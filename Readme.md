@@ -80,32 +80,37 @@ This project implements a **Relative Strength Index (RSI) calculation FSM** in V
 ---
 
 ## 🧠 **RSI Computation Formula**
-The RSI is computed using the following formula:
 
-\[
+The RSI is computed using the following formulas:
+
+$$
 RS = \frac{\text{Average Gain}}{\text{Average Loss}}
-\]
+$$
 
-\[
+$$
 RSI = 100 - \frac{100}{1 + RS}
-\]
+$$
 
 ### **Smoothing Formula**
-\[
+
+$$
 \text{New Avg Gain} = \frac{(13 \times \text{Prev Avg Gain}) + \text{Current Gain}}{14}
-\]
-\[
+$$
+
+$$
 \text{New Avg Loss} = \frac{(13 \times \text{Prev Avg Loss}) + \text{Current Loss}}{14}
-\]
+$$
 
 ---
 
 ## 📏 **Fixed-Point Implementation**
 - Uses bit-shifting for enhanced precision in RSI calculation.  
 - Implements the formula:  
-\[
-\text{RSI} \leq 100 - \left( \frac{100 \times 2^{\text{FIXED\_POINT\_BITS}}}{2^{\text{FIXED\_POINT\_BITS}} + \text{RS}} \right) \div 2^{\text{FIXED\_POINT\_BITS}}
-\]
+
+$$
+\text{RSI} = 100 - \left( \frac{100 \times 2^{\text{FIXED\_POINT\_BITS}}}{2^{\text{FIXED\_POINT\_BITS}} + RS} \right) \div 2^{\text{FIXED\_POINT\_BITS}}
+$$
+
 - Configurable fixed-point precision bits.
 - Includes saturation logic to prevent overflow.
 
